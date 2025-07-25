@@ -26,16 +26,15 @@ class ModelNet2DProjectionDataset(ImageFolder):
 # 2. Helper Functions
 # -------------------------------
 def evaluate_vlm_model(model, processor, dataloader, class_names):
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = "cpu" #torch.device("cuda" if torch.cuda.is_available() else "cpu")
     model.eval().to(device)
-    pdb.set_trace()
 
     all_preds = []
     all_labels = []
     start_infer = time.time()
     for images, labels in dataloader:
         for img, label in zip(images, labels):
-            inputs = processor(images=transforms.ToPILImage()(img), text="classify:", return_tensors="pt").to(device)
+            inputs = processor(images=transforms.ToPILImage()(img), text="<image>classify:", return_tensors="pt").to(device)
             with torch.no_grad():
                 outputs = model.generate(**inputs, max_new_tokens=32)
             pred = processor.decode(outputs[0], skip_special_tokens=True)
@@ -58,7 +57,7 @@ def get_model_size(model):
 # -------------------------------
 def main():
     # Load ModelNet40-style dataset (pre-rendered 2D projections as .png)
-    data_dir = "./ModelNet40/ModelNet40_2D"  # Replace with actual dataset path
+    data_dir = "../ModelNet40/ModelNet40_2DSample"  # Replace with actual dataset path
     transform = transforms.Compose([
         transforms.Resize((224, 224)),
         transforms.ToTensor()
