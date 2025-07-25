@@ -3,8 +3,16 @@ import matplotlib.pyplot as plt
 import numpy as np
 from pathlib import Path
 import os
+from tqdm import tqdm
+from pathlib import Path
 
 def render_views_matplotlib(mesh_path, output_dir, views=8, image_size=224):
+    output_dir = Path(output_dir)
+    # Skip rendering if all expected images already exist
+    if all((output_dir / f"view_{i:02d}.png").exists() for i in range(views)):
+        print(f"Skipping (already rendered): {mesh_path}")
+        return
+
     mesh = trimesh.load(mesh_path)
     os.makedirs(output_dir, exist_ok=True)
 
@@ -45,24 +53,32 @@ def process_modelnet40_matplotlib(modelnet_dir, output_root, views_per_model=8, 
     modelnet_dir = Path(modelnet_dir)
     output_root = Path(output_root)
     classes = sorted([d for d in modelnet_dir.iterdir() if d.is_dir()])
-    
+
     for class_dir in classes:
+        class_name = class_dir.name
+        print(f"\n🔎 Processing class: {class_name}")
+
         for split in ['train', 'test']:
             input_dir = class_dir / split
             if not input_dir.exists():
                 continue
 
-            for off_file in input_dir.glob("*.off"):
+            off_files = list(input_dir.glob("*.off"))
+            if not off_files:
+                print(f"  ⚠️ No OFF files in {input_dir}")
+                continue
+
+            for off_file in tqdm(off_files, desc=f"  [{split}] {class_name}", leave=False):
                 relative = off_file.relative_to(modelnet_dir)
                 target_dir = output_root / relative.parent / off_file.stem
                 try:
-                    render_views_matplotlib(str(off_file), str(target_dir), views=views_per_model, image_size=image_size)
-                    print(f"Rendered: {off_file}")
+                    render_views_matplotlib(str(off_file), str(target_dir),
+                                            views=views_per_model, image_size=image_size)
                 except Exception as e:
-                    print(f"Failed to render {off_file}: {e}")
+                    print(f"    ❌ Failed to render {off_file}: {e}")
 
 if __name__ == "__main__":
-    modelnet_path = "./ModelNet40/ModelNet40"
-    output_path = "./ModelNet40/ModelNet40_2D"
+    modelnet_path = "../ModelNet40/ModelNet40"
+    output_path = "../ModelNet40/ModelNet40_2D"
 
     process_modelnet40_matplotlib(modelnet_path, output_path, views_per_model=8, image_size=224)
