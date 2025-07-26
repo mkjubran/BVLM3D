@@ -82,7 +82,7 @@ def main():
     # Dynamic Quantization
     print("Applying dynamic quantization...")
     model_int8 = torch.quantization.quantize_dynamic(
-        model_fp32.cpu(), {nn.Linear}, dtype=torch.qint8
+        model_fp32.cpu(), {nn.Linear, nn.LSTM}, dtype=torch.qint8
     )
 
     # Evaluate Quantized
