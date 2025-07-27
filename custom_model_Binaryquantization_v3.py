@@ -10,6 +10,9 @@ from torchvision import transforms
 from torchvision.datasets.folder import default_loader, IMG_EXTENSIONS
 from sklearn.metrics import accuracy_score
 import torch.nn.functional as F
+import csv
+from tqdm import tqdm 
+
 
 # -------------------------------
 # 1. Custom Dataset Loader
@@ -141,28 +144,61 @@ class QuantizedSimpleCNN(nn.Module):
 # -------------------------------
 # 4. Training and Evaluation
 # -------------------------------
-def train_model(model, dataloader, device, save_path, epochs=10, lr=1e-3):
-    model.train().to(device)
+def train_model(model, dataloader, device, save_path, epochs=10, lr=1e-3, model_type="fp32"):
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     criterion = nn.CrossEntropyLoss()
+
+    log_file = f"{model_type}_training_log.csv"
+    os.makedirs(f"../saved_models/{model_type}", exist_ok=True)  # >>> CHANGED >>> Create save dir
+
+    with open(log_file, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["Epoch", "Train Loss", "Train Accuracy", "Model Size (MB)"])
+
     for epoch in range(epochs):
         total_loss = 0
-        for x, y in dataloader:
+        correct = 0
+        total = 0
+
+        for x, y in tqdm(dataloader, desc=f"Epoch {epoch+1}/{epochs}"):
             x, y = x.to(device), y.to(device)
             optimizer.zero_grad()
-            loss = criterion(model(x), y)
+            outputs = model(x)
+            loss = criterion(outputs, y)
             loss.backward()
             optimizer.step()
             total_loss += loss.item()
-        print(f"Epoch {epoch+1}, Loss: {total_loss / len(dataloader):.4f}")
-    torch.save(model.state_dict(), save_path)
+
+            preds = outputs.argmax(dim=1)
+            correct += (preds == y).sum().item()
+            total += y.size(0)
+
+        acc = correct / total
+        if model_type == 'fp32':
+            size = get_model_size(model)
+        elif model_type == 'binary':
+            size = get_binary_model_size(model)
+        else:
+            size = get_int8_model_size(model)
+
+        print(f"Epoch {epoch+1}, Loss: {total_loss / len(dataloader):.4f}, Accuracy: {acc:.2%}, Model Size: {size:.2f} MB")
+        with open(log_file, "a", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow([epoch+1,f"{total_loss / len(dataloader):.4f}", f"{acc:.4f}", f"{size:.4f}"])
+
+        if (epoch + 1) % 5 == 0:
+            checkpoint_path = f"saved_models/{model_type}/model_epoch{epoch+1}.pth"
+            torch.save(model.state_dict(), checkpoint_path)
+            print(f"Saved checkpoint to {checkpoint_path}")
+
+    #torch.save(model.state_dict(), save_path)
 
 def evaluate_model(model, dataloader, device):
     model.eval().to(device)
     all_preds, all_labels = [], []
     start = time.time()
     with torch.no_grad():
-        for x, y in dataloader:
+        for x, y in tqdm(dataloader, desc=f"Evaluate"):
             x = x.to(device)
             preds = model(x).argmax(dim=1).cpu()
             all_preds.extend(preds.numpy())
@@ -232,7 +268,7 @@ def main():
             torch.save(model.state_dict(), save_path)
             print("INT8 model quantized and saved.")
         else:
-            train_model(model, train_loader, device, save_path, epochs=5)
+            train_model(model, train_loader, device, save_path, epochs=5, model_type=args.model_type)
 
     else:  # eval
         model.load_state_dict(torch.load(save_path, map_location=device))
