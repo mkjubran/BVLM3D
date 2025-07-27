@@ -149,7 +149,7 @@ def train_model(model, dataloader, device, save_path, epochs=10, lr=1e-3, model_
     criterion = nn.CrossEntropyLoss()
 
     log_file = f"../{model_type}_training_log.csv"
-    os.makedirs(f"../saved_models/{model_type}", exist_ok=True)  # >>> CHANGED >>> Create save dir
+    os.makedirs(f"../saved_models/{model_type}", exist_ok=True)
 
     with open(log_file, "w", newline="") as f:
         writer = csv.writer(f)
@@ -232,9 +232,11 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--mode', choices=['train', 'eval'], required=True)
     parser.add_argument('--model_type', choices=['fp32', 'binary', 'int8'], required=True)
+    parser.add_argument('--epochs', type=int, default=10, help='Number of training epochs')
     args = parser.parse_args()
 
-    data_dir = "../ModelNet40/ModelNet40_2DTrainTest"
+    #data_dir = "../ModelNet40/ModelNet40_2DTrainTest"
+    data_dir = "../ModelNet40/ModelNet40_2DTrainTestSome"
     transform = transforms.Compose([transforms.Resize((224, 224)), transforms.ToTensor()])
 
     train_loader = DataLoader(NestedImageFolder(os.path.join(data_dir, "train"), transform), batch_size=8, shuffle=True)
@@ -255,20 +257,22 @@ def main():
 
     if args.mode == 'train':
         if args.model_type == 'int8':
-            model.eval()
+            model.train()
             model.qconfig = torch.quantization.get_default_qconfig('fbgemm')
             # Fuse Conv+ReLU layers before quantization
             fuse_modules(model, [['features.0', 'features.1'], ['features.3', 'features.4'], ['features.6', 'features.7']], inplace=True)
-            model = prepare(model)
-            # Calibration with training data
-            print("Calibrating INT8 model...")
-            for x, _ in train_loader:
-                model(x)
-            model = convert(model)
+            model = prepare(model,inplace=True) # Prepare QAT model
+
+            # Now train like a normal model
+            train_model(model, train_loader, device, save_path, epochs=args.epochs, model_type=args.model_type)
+
+            model.eval()
+            model = convert(model, inplace=True)  # Final conversion after QAT
             torch.save(model.state_dict(), save_path)
-            print("INT8 model quantized and saved.")
+            print("INT8 QAT model trained and saved.")
+
         else:
-            train_model(model, train_loader, device, save_path, epochs=5, model_type=args.model_type)
+            train_model(model, train_loader, device, save_path, epochs=args.epochs, model_type=args.model_type)
 
     else:  # eval
         model.load_state_dict(torch.load(save_path, map_location=device))
