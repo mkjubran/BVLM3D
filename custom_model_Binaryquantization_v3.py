@@ -148,7 +148,7 @@ def train_model(model, dataloader, device, save_path, epochs=10, lr=1e-3, model_
     optimizer = torch.optim.Adam(model.parameters(), lr=lr)
     criterion = nn.CrossEntropyLoss()
 
-    log_file = f"{model_type}_training_log.csv"
+    log_file = f"../{model_type}_training_log.csv"
     os.makedirs(f"../saved_models/{model_type}", exist_ok=True)  # >>> CHANGED >>> Create save dir
 
     with open(log_file, "w", newline="") as f:
