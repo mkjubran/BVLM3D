@@ -186,12 +186,66 @@ def train_model(model, dataloader, device, save_path, epochs=10, lr=1e-3, model_
             writer = csv.writer(f)
             writer.writerow([epoch+1,f"{total_loss / len(dataloader):.4f}", f"{acc:.4f}", f"{size:.4f}"])
 
-        if (epoch + 1) % 5 == 0:
-            checkpoint_path = f"saved_models/{model_type}/model_epoch{epoch+1}.pth"
+        if ((epoch + 1) % 5 == 0) or ((epoch <= 10) and ((epoch + 1) % 2)):
+            checkpoint_path = f"../saved_models/{model_type}/model_epoch{epoch+1}.pth"
             torch.save(model.state_dict(), checkpoint_path)
             print(f"Saved checkpoint to {checkpoint_path}")
 
-    #torch.save(model.state_dict(), save_path)
+def train_int8_model(model, dataloader, device, save_path, epochs=10, lr=1e-3):
+    model.train()
+    model.qconfig = torch.quantization.get_default_qconfig('fbgemm')
+    fuse_modules(model, [['features.0', 'features.1'], ['features.3', 'features.4'], ['features.6', 'features.7']], inplace=True)
+    model = prepare(model, inplace=True)  # Prepare QAT model
+
+    optimizer = torch.optim.Adam(model.parameters(), lr=lr)
+    criterion = nn.CrossEntropyLoss()
+    
+    log_file = "../int8_training_log.csv"
+    os.makedirs("../saved_models/int8", exist_ok=True)
+    with open(log_file, "w", newline="") as f:
+        writer = csv.writer(f)
+        writer.writerow(["Epoch", "Train Loss", "Train Accuracy", "Model Size (MB)"])
+
+    for epoch in range(epochs):
+        total_loss = 0
+        correct = 0
+        total = 0
+        model.train()
+
+        for x, y in tqdm(dataloader, desc=f"Epoch {epoch+1}/{epochs}"):
+            x, y = x.to(device), y.to(device)
+            optimizer.zero_grad()
+            outputs = model(x)
+            loss = criterion(outputs, y)
+            loss.backward()
+            optimizer.step()
+
+            total_loss += loss.item()
+            preds = outputs.argmax(dim=1)
+            correct += (preds == y).sum().item()
+            total += y.size(0)
+
+        acc = correct / total
+
+        # Convert to quantized model for size estimation (copy original to avoid destroying training model)
+        model_copy = torch.quantization.convert(model, inplace=False)
+        size = get_model_size(model_copy)
+
+        print(f"[INT8] Epoch {epoch+1}, Loss: {total_loss / len(dataloader):.4f}, Accuracy: {acc:.2%}, Model Size: {size:.2f} MB")
+
+        with open(log_file, "a", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerow([epoch+1, f"{total_loss / len(dataloader):.4f}", f"{acc:.4f}", f"{size:.4f}"])
+
+        if ((epoch + 1) % 5 == 0) or ((epoch <= 10) and ((epoch + 1) % 2)):
+            torch.save(model_copy.state_dict(), f"../saved_models/int8/model_epoch{epoch+1}.pth")
+            print(f"Saved INT8 checkpoint at epoch {epoch+1}.")
+
+    # Final conversion and save
+    model_final = torch.quantization.convert(model, inplace=False)
+    torch.save(model_final.state_dict(), save_path)
+    print("Final INT8 model trained and saved.")
+
 
 def evaluate_model(model, dataloader, device):
     model.eval().to(device)
@@ -235,8 +289,8 @@ def main():
     parser.add_argument('--epochs', type=int, default=10, help='Number of training epochs')
     args = parser.parse_args()
 
-    #data_dir = "../ModelNet40/ModelNet40_2DTrainTest"
-    data_dir = "../ModelNet40/ModelNet40_2DTrainTestSome"
+    data_dir = "../ModelNet40/ModelNet40_2DTrainTest"
+    #data_dir = "../ModelNet40/ModelNet40_2DTrainTestSome"
     transform = transforms.Compose([transforms.Resize((224, 224)), transforms.ToTensor()])
 
     train_loader = DataLoader(NestedImageFolder(os.path.join(data_dir, "train"), transform), batch_size=8, shuffle=True)
@@ -257,20 +311,7 @@ def main():
 
     if args.mode == 'train':
         if args.model_type == 'int8':
-            model.train()
-            model.qconfig = torch.quantization.get_default_qconfig('fbgemm')
-            # Fuse Conv+ReLU layers before quantization
-            fuse_modules(model, [['features.0', 'features.1'], ['features.3', 'features.4'], ['features.6', 'features.7']], inplace=True)
-            model = prepare(model,inplace=True) # Prepare QAT model
-
-            # Now train like a normal model
-            train_model(model, train_loader, device, save_path, epochs=args.epochs, model_type=args.model_type)
-
-            model.eval()
-            model = convert(model, inplace=True)  # Final conversion after QAT
-            torch.save(model.state_dict(), save_path)
-            print("INT8 QAT model trained and saved.")
-
+            train_int8_model(model, train_loader, device, save_path, epochs=args.epochs)
         else:
             train_model(model, train_loader, device, save_path, epochs=args.epochs, model_type=args.model_type)
 
